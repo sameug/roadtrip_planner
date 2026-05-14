@@ -274,6 +274,8 @@ textarea.rt-input{height:72px;padding:8px 9px;resize:vertical;line-height:1.5}
   .sheet-panels{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0}
   .sheet-panel{display:none;flex:1;flex-direction:column;overflow:hidden;min-height:0}
   .sheet-panel.active{display:flex}
+  /* prevent horizontal scroll inside sheet panels */
+  .sheet-panel > *{overflow-x:hidden;touch-action:pan-y}
 
   /* peek state — hide tabs and panels */
   .bottom-sheet.is-peek .sheet-tabs{display:none}
@@ -422,7 +424,7 @@ textarea.rt-input{height:72px;padding:8px 9px;resize:vertical;line-height:1.5}
 
         <!-- Road Trip panel -->
         <div class="sheet-panel active" id="sheet-panel-roadtrip">
-          <div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch">
+          <div style="flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;touch-action:pan-y">
             <div id="rt-form-mobile" class="rt-form"></div>
           </div>
         </div>
@@ -806,79 +808,124 @@ async function fetchRoute(){
 // ── RT FORM ──
 function renderRTForm(container){
   if(!container)return;
+  const isMobileForm=container.id==='rt-form-mobile';
+  const pfx=isMobileForm?'m-':'';  // prefix: m- for mobile, empty for desktop
   const trip=getCurrentTrip();const m=trip?.meta||{};
   container.innerHTML=`
-    <div class="rt-group"><label class="rt-label">Nom du road trip</label><input class="rt-input" type="text" id="rt-name" placeholder="Ex : Tour de Bretagne 2025" value="${(m.name||'').replace(/"/g,'&quot;')}" oninput="saveMeta()"/></div>
-    <div class="rt-group"><label class="rt-label">Dates</label><div class="rt-dates"><div><label class="rt-label" style="margin-bottom:2px">Départ</label><input class="rt-input" type="date" id="rt-start" value="${m.start||''}" onchange="onDateChange()"/></div><div><label class="rt-label" style="margin-bottom:2px">Retour</label><input class="rt-input" type="date" id="rt-end" value="${m.end||''}" onchange="onDateChange()"/></div></div></div>
-    <div class="rt-computed" id="rt-days-block" style="display:none"><div class="rt-computed-label">Durée du voyage</div><div class="rt-computed-val" id="rt-days-val">—</div><div class="rt-computed-sub" id="rt-days-sub"></div></div>
+    <div class="rt-group"><label class="rt-label">Nom du road trip</label><input class="rt-input" type="text" id="${pfx}rt-name" placeholder="Ex : Tour de Bretagne 2025" value="${(m.name||'').replace(/"/g,'&quot;')}" oninput="saveMetaFrom(this)"/></div>
+    <div class="rt-group"><label class="rt-label">Dates</label><div class="rt-dates">
+      <div><label class="rt-label" style="margin-bottom:2px">Départ</label><input class="rt-input" type="date" id="${pfx}rt-start" value="${m.start||''}" onchange="dateChangeFrom(this)"/></div>
+      <div><label class="rt-label" style="margin-bottom:2px">Retour</label><input class="rt-input" type="date" id="${pfx}rt-end" value="${m.end||''}" onchange="dateChangeFrom(this)"/></div>
+    </div></div>
+    <div class="rt-computed" id="${pfx}rt-days-block" style="display:none"><div class="rt-computed-label">Durée du voyage</div><div class="rt-computed-val" id="${pfx}rt-days-val">—</div><div class="rt-computed-sub" id="${pfx}rt-days-sub"></div></div>
     <div class="rt-divider"></div>
-    <div class="rt-group"><label class="rt-label">Nombre de voyageurs</label><input class="rt-input" type="number" id="rt-travelers" value="${m.travelers||'1'}" min="1" max="20" oninput="saveMeta()"/></div>
-    <div class="rt-group"><label class="rt-label">Budget total estimé (€)</label><input class="rt-input" type="number" id="rt-budget" value="${m.budget||''}" placeholder="Ex : 1500" min="0" oninput="saveMeta()"/></div>
-    <div class="rt-group"><label class="rt-label">Notes</label><textarea class="rt-input" id="rt-notes" placeholder="Hébergements, activités…" oninput="saveMeta()">${m.notes||''}</textarea></div>
+    <div class="rt-group"><label class="rt-label">Nombre de voyageurs</label><input class="rt-input" type="number" id="${pfx}rt-travelers" value="${m.travelers||'1'}" min="1" max="20" oninput="saveMetaFrom(this)"/></div>
+    <div class="rt-group"><label class="rt-label">Budget total estimé (€)</label><input class="rt-input" type="number" id="${pfx}rt-budget" value="${m.budget||''}" placeholder="Ex : 1500" min="0" oninput="saveMetaFrom(this)"/></div>
+    <div class="rt-group"><label class="rt-label">Notes</label><textarea class="rt-input" id="${pfx}rt-notes" placeholder="Hébergements, activités…" oninput="saveMetaFrom(this)">${m.notes||''}</textarea></div>
     <div class="rt-divider"></div>
-    <div class="rt-group"><label class="rt-label">Checklist</label><div class="checklist-add"><input class="checklist-input" id="cl-input" type="text" placeholder="Ajouter un élément…" onkeydown="if(event.key==='Enter')addCheckItem()"/><button class="checklist-add-btn" onclick="addCheckItem()"><i class="ti ti-plus"></i></button></div><ul class="checklist" id="cl-list"></ul></div>`;
-  renderChecklist();
-  // trigger date display without saving (avoids overwriting with empty)
-  const s=m.start,e=m.end;
-  if(s&&e&&e>=s){
-    const days=Math.round((new Date(e)-new Date(s))/(864e5))+1;
-    const block=container.querySelector('#rt-days-block');
-    const dv=container.querySelector('#rt-days-val');
-    const ds=container.querySelector('#rt-days-sub');
+    <div class="rt-group"><label class="rt-label">Checklist</label><div class="checklist-add"><input class="checklist-input" id="${pfx}cl-input" type="text" placeholder="Ajouter un élément…" onkeydown="if(event.key==='Enter')addCheckItemFrom(this)"/><button class="checklist-add-btn" onclick="addCheckItemFrom(this.previousElementSibling)"><i class="ti ti-plus"></i></button></div><ul class="checklist" id="${pfx}cl-list"></ul></div>`;
+  renderChecklistIn(container);
+  // Show days block if dates already set
+  if(m.start&&m.end&&m.end>=m.start){
+    const days=Math.round((new Date(m.end)-new Date(m.start))/(864e5))+1;
+    const block=container.querySelector('[id$="rt-days-block"]');
+    const dv=container.querySelector('[id$="rt-days-val"]');
+    const ds=container.querySelector('[id$="rt-days-sub"]');
     if(block)block.style.display='block';
     if(dv)dv.textContent=days+' jour'+(days>1?'s':'');
     if(ds)ds.textContent=totalKm?`Soit ~${Math.round(totalKm/days)} km/jour`:'';
   }
 }
 
-// ── ROADTRIP META ──
-// Helper: read a field value — tries both desktop and mobile instances
-function getField(id){
-  const els=document.querySelectorAll('#'+id);
-  for(const el of els){if(el.value!==undefined&&el.value!=='')return el.value;}
-  return '';
-}
-// Helper: set a field value on all instances
-function setField(id,v){
-  document.querySelectorAll('#'+id).forEach(el=>{if(v!==undefined)el.value=v||'';});
+// Called from any form field — reads from the form that contains the field
+function saveMetaFrom(el){
+  const form=el.closest('.rt-form');if(!form)return;
+  const v=id=>form.querySelector('[id$="'+id+'"]')?.value||'';
+  const trip=getCurrentTrip();if(!trip)return;
+  trip.meta={
+    name:v('rt-name'),start:v('rt-start'),end:v('rt-end'),
+    travelers:v('rt-travelers')||'1',budget:v('rt-budget'),
+    notes:form.querySelector('[id$="rt-notes"]')?.value||'',
+    checklist:JSON.parse(JSON.stringify(checkItems))
+  };
+  if(trip.meta.name)trip.name=trip.meta.name;
+  // sync other form instance
+  syncOtherForm(form,trip.meta);
+  saveAllTrips();renderTripsList();updatePeekLabel();updateSummary();
 }
 
-function onDateChange(){
-  const s=getField('rt-start'),e=getField('rt-end');
-  document.querySelectorAll('#rt-days-block').forEach(block=>{
-    if(s&&e&&e>=s){
-      const days=Math.round((new Date(e)-new Date(s))/(864e5))+1;
-      const dv=block.querySelector('#rt-days-val'),ds=block.querySelector('#rt-days-sub');
-      if(dv)dv.textContent=days+' jour'+(days>1?'s':'');
-      if(ds)ds.textContent=totalKm?`Soit ~${Math.round(totalKm/days)} km/jour`:'';
-      block.style.display='block';
-    }else{block.style.display='none';}
+function dateChangeFrom(el){
+  const form=el.closest('.rt-form');if(!form)return;
+  const s=form.querySelector('[id$="rt-start"]')?.value;
+  const e=form.querySelector('[id$="rt-end"]')?.value;
+  const block=form.querySelector('[id$="rt-days-block"]');
+  const dv=form.querySelector('[id$="rt-days-val"]');
+  const ds=form.querySelector('[id$="rt-days-sub"]');
+  if(s&&e&&e>=s){
+    const days=Math.round((new Date(e)-new Date(s))/(864e5))+1;
+    if(block)block.style.display='block';
+    if(dv)dv.textContent=days+' jour'+(days>1?'s':'');
+    if(ds)ds.textContent=totalKm?`Soit ~${Math.round(totalKm/days)} km/jour`:'';
+  }else{if(block)block.style.display='none';}
+  saveMetaFrom(el);
+}
+
+function syncOtherForm(sourceForm,meta){
+  // sync the other form instance (desktop↔mobile)
+  const allForms=document.querySelectorAll('.rt-form');
+  allForms.forEach(f=>{
+    if(f===sourceForm)return;
+    const set=(sel,v)=>{const el=f.querySelector('[id$="'+sel+'"]');if(el&&v!==undefined)el.value=v||'';};
+    set('rt-name',meta.name);set('rt-start',meta.start);set('rt-end',meta.end);
+    set('rt-travelers',meta.travelers);set('rt-budget',meta.budget);
+    const ta=f.querySelector('[id$="rt-notes"]');if(ta)ta.value=meta.notes||'';
   });
-  updateSummary();saveMeta();
 }
 
+// ── ROADTRIP META ──
+function getCurrentMeta(){
+  // Read from whichever form is currently in the DOM and has values
+  // Priority: mobile form if on mobile, desktop otherwise
+  const form=isMobile()
+    ? document.getElementById('rt-form-mobile')
+    : document.getElementById('rt-form-desktop');
+  if(!form)return{name:'',start:'',end:'',travelers:'1',budget:'',notes:'',checklist:[]};
+  const v=sel=>form.querySelector('[id$="'+sel+'"]')?.value||'';
+  return{
+    name:v('rt-name'),start:v('rt-start'),end:v('rt-end'),
+    travelers:v('rt-travelers')||'1',budget:v('rt-budget'),
+    notes:form.querySelector('[id$="rt-notes"]')?.value||'',
+    checklist:JSON.parse(JSON.stringify(checkItems))
+  };
+}
 function saveMeta(){
   const trip=getCurrentTrip();if(!trip)return;
   trip.meta=getCurrentMeta();
   if(trip.meta.name)trip.name=trip.meta.name;
-  saveAllTrips();renderTripsList();updatePeekLabel();
+  saveAllTrips();renderTripsList();updatePeekLabel();updateSummary();
 }
-
+function onDateChange(){
+  // Legacy: iterate all rt-form instances
+  document.querySelectorAll('.rt-form').forEach(form=>{
+    const s=form.querySelector('[id$="rt-start"]')?.value;
+    const e=form.querySelector('[id$="rt-end"]')?.value;
+    const block=form.querySelector('[id$="rt-days-block"]');
+    if(s&&e&&e>=s){
+      const days=Math.round((new Date(e)-new Date(s))/(864e5))+1;
+      const dv=form.querySelector('[id$="rt-days-val"]');
+      const ds=form.querySelector('[id$="rt-days-sub"]');
+      if(block)block.style.display='block';
+      if(dv)dv.textContent=days+' jour'+(days>1?'s':'');
+      if(ds)ds.textContent=totalKm?`Soit ~${Math.round(totalKm/days)} km/jour`:'';
+    }else if(block)block.style.display='none';
+  });
+  updateSummary();
+}
 function getTripDays(){
-  const s=getField('rt-start'),e=getField('rt-end');
-  if(s&&e&&e>=s)return Math.round((new Date(e)-new Date(s))/(864e5))+1;return null;
-}
-
-function getCurrentMeta(){
-  return{
-    name:getField('rt-name'),
-    start:getField('rt-start'),
-    end:getField('rt-end'),
-    travelers:getField('rt-travelers')||'1',
-    budget:getField('rt-budget'),
-    notes:getField('rt-notes'),
-    checklist:JSON.parse(JSON.stringify(checkItems))
-  };
+  const trip=getCurrentTrip();if(!trip?.meta)return null;
+  const s=trip.meta.start,e=trip.meta.end;
+  if(s&&e&&e>=s)return Math.round((new Date(e)-new Date(s))/(864e5))+1;
+  return null;
 }
 
 // ── SUMMARY ──
@@ -913,16 +960,27 @@ function calcFuel(){
 }
 
 // ── CHECKLIST ──
-function addCheckItem(){
-  const inp=document.getElementById('cl-input');if(!inp)return;
+function addCheckItemFrom(inp){
+  if(!inp)return;
   const text=inp.value.trim();if(!text)return;
   checkItems.push({id:Date.now(),text,done:false});inp.value='';
-  renderChecklist();saveMeta();
+  renderAllChecklists();saveMeta();
 }
-function toggleCheck(id){const item=checkItems.find(c=>c.id===id);if(item)item.done=!item.done;renderChecklist();saveMeta();}
-function deleteCheck(id){checkItems=checkItems.filter(c=>c.id!==id);renderChecklist();saveMeta();}
-function renderChecklist(){
-  const list=document.getElementById('cl-list');if(!list)return;
+function addCheckItem(){
+  // fallback for desktop
+  const inp=document.querySelector('[id$="cl-input"]');
+  if(inp)addCheckItemFrom(inp);
+}
+function toggleCheck(id){const item=checkItems.find(c=>c.id===id);if(item)item.done=!item.done;renderAllChecklists();saveMeta();}
+function deleteCheck(id){checkItems=checkItems.filter(c=>c.id!==id);renderAllChecklists();saveMeta();}
+
+function renderAllChecklists(){
+  document.querySelectorAll('.rt-form').forEach(form=>renderChecklistIn(form));
+}
+function renderChecklist(){renderAllChecklists();}
+
+function renderChecklistIn(container){
+  const list=container.querySelector('[id$="cl-list"]');if(!list)return;
   const sorted=[...checkItems].sort((a,b)=>a.done===b.done?0:a.done?1:-1);
   list.innerHTML='';
   sorted.forEach(item=>{
