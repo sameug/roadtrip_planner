@@ -215,40 +215,36 @@ textarea.rt-input{height:72px;padding:8px 9px;resize:vertical;line-height:1.5}
   /* hide desktop sidebar */
   .sidebar{display:none!important}
 
-  /* map fills everything below header */
+  /* map fills everything below header — fixed so sheet doesn't affect it */
   .main{position:relative;flex:1;overflow:hidden}
   .map-area{position:absolute;inset:0}
-  #leaflet-map{width:100%;height:100%}
+  #leaflet-map{width:100%;height:100%;position:absolute;inset:0;z-index:1}
 
-  /* blur overlay on map — driven by JS via CSS var */
-  .map-area::after{
-    content:'';
-    position:absolute;inset:0;
-    backdrop-filter:blur(var(--map-blur,0px));
-    -webkit-backdrop-filter:blur(var(--map-blur,0px));
-    background:rgba(0,0,0,var(--map-dim,0));
+  /* blur overlay — separate element, never captures touch */
+  #map-blur-overlay{
+    position:absolute;inset:0;z-index:2;
     pointer-events:none;
-    z-index:10;
-    transition:backdrop-filter 0.1s, background 0.1s;
+    background:rgba(0,0,0,0);
+    backdrop-filter:blur(0px);
+    -webkit-backdrop-filter:blur(0px);
+    transition:none;
   }
 
-  /* ── BOTTOM SHEET ── */
+  /* ── BOTTOM SHEET — fixed to viewport ── */
   .bottom-sheet{
-    position:absolute;
+    position:fixed;
     left:0;right:0;bottom:0;
-    /* default: peeking state */
-    height:calc(100% - var(--header-h) + 0px); /* full available height */
-    transform:translateY(calc(100% - var(--sheet-peek)));
+    height:92vh; /* JS will also set this */
     background:var(--bg);
     border-radius:18px 18px 0 0;
-    box-shadow:0 -4px 32px rgba(0,0,0,0.14);
-    z-index:20;
+    box-shadow:0 -4px 32px rgba(0,0,0,0.15);
+    z-index:900;
     display:flex;
     flex-direction:column;
     overflow:hidden;
-    /* smooth drag */
     will-change:transform;
-    transition:none; /* JS handles drag; CSS transition only after release */
+    /* start offscreen — JS positions it */
+    transform:translateY(100%);
   }
   .bottom-sheet.snapping{
     transition:transform 0.32s cubic-bezier(0.4,0,0.2,1);
@@ -256,16 +252,17 @@ textarea.rt-input{height:72px;padding:8px 9px;resize:vertical;line-height:1.5}
 
   /* handle bar */
   .sheet-handle{
-    width:40px;height:4px;background:var(--brd);border-radius:2px;
-    margin:10px auto 0;flex-shrink:0;cursor:grab;touch-action:none;
+    width:40px;height:5px;background:#ddd;border-radius:3px;
+    margin:10px auto 0;flex-shrink:0;
+    touch-action:none;cursor:grab;
   }
 
-  /* sheet inner tabs — mirror desktop sidebar-tabs */
+  /* sheet inner tabs */
   .sheet-tabs{
     display:flex;border-bottom:0.5px solid var(--brd);flex-shrink:0;margin-top:6px;
   }
   .sheet-tab{
-    flex:1;height:36px;border:none;background:transparent;
+    flex:1;height:38px;border:none;background:transparent;
     font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;
     color:var(--txt2);cursor:pointer;border-bottom:2px solid transparent;
     transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:5px;
@@ -278,15 +275,14 @@ textarea.rt-input{height:72px;padding:8px 9px;resize:vertical;line-height:1.5}
   .sheet-panel{display:none;flex:1;flex-direction:column;overflow:hidden;min-height:0}
   .sheet-panel.active{display:flex}
 
-  /* peek label shown when collapsed */
+  /* peek label */
   .sheet-peek-label{
     display:flex;align-items:center;justify-content:space-between;
-    padding:8px 16px 10px;flex-shrink:0;
+    padding:8px 16px 10px;flex-shrink:0;cursor:pointer;
   }
   .sheet-peek-title{font-family:'Syne',sans-serif;font-size:14px;font-weight:700}
   .sheet-peek-meta{font-size:12px;color:var(--txt2)}
 
-  /* hide click hint on mobile (use sheet instead) */
   .map-click-hint{display:none}
 }
 
@@ -395,11 +391,14 @@ textarea.rt-input{height:72px;padding:8px 9px;resize:vertical;line-height:1.5}
   <!-- MAP -->
   <div class="map-area" id="map-area">
     <div id="leaflet-map"></div>
-    <div class="route-loading" id="route-loading"><div class="spin"></div>Calcul…</div>
+    <div id="map-blur-overlay"></div>
+    <div class="route-loading" id="route-loading" style="z-index:3"><div class="spin"></div>Calcul…</div>
     <div class="map-click-hint" id="map-hint">Cliquez pour ajouter une étape</div>
+  </div>
+</div>
 
-    <!-- MOBILE BOTTOM SHEET (inside map-area for positioning) -->
-    <div class="bottom-sheet" id="bottom-sheet">
+<!-- MOBILE BOTTOM SHEET — fixed, outside map-area -->
+<div class="bottom-sheet" id="bottom-sheet">
       <div class="sheet-handle" id="sheet-handle"></div>
 
       <!-- Peek label (visible when collapsed) -->
@@ -506,25 +505,14 @@ function confirmAddStop(lat,lng,addr){map.closePopup(confirmPopup);confirmPopup=
 function initSheet(){
   if(!isMobile())return;
   sheetEl=document.getElementById('bottom-sheet');
-  mapAreaEl=document.getElementById('map-area');
   const handle=document.getElementById('sheet-handle');
   const peekLabel=document.getElementById('sheet-peek-label');
 
-  // Compute heights
-  function computeHeights(){
-    sheetH=mapAreaEl.offsetHeight;
-    peekH=document.querySelector('.sheet-peek-label').offsetHeight
-        + document.querySelector('.sheet-handle').offsetHeight
-        + document.querySelector('.sheet-tabs').offsetHeight + 24;
-    expandedH=sheetH * 0.88; // 88% of map height when open
-    sheetEl.style.height=sheetH+'px';
-    snapTo(SNAPPED_PEEK?'peek':'expanded',false);
-  }
-  window.addEventListener('resize',computeHeights);
-  setTimeout(computeHeights,100);
+  computeHeights();
+  window.addEventListener('resize',()=>{computeHeights();});
 
-  // Drag on handle AND peek label
-  [handle, peekLabel].forEach(el=>{
+  // Drag listeners on handle + peek label
+  [handle,peekLabel].forEach(el=>{
     el.addEventListener('touchstart',onDragStart,{passive:true});
     el.addEventListener('mousedown',onDragStart);
   });
@@ -534,29 +522,55 @@ function initSheet(){
   window.addEventListener('mouseup',onDragEnd);
 }
 
+function computeHeights(){
+  if(!sheetEl)return;
+  const vh=window.innerHeight;
+  const headerH=document.querySelector('.header').offsetHeight;
+  const handleH=document.querySelector('.sheet-handle')?.offsetHeight||14;
+  const peekLabelH=document.getElementById('sheet-peek-label')?.offsetHeight||40;
+  const tabsH=document.querySelector('.sheet-tabs')?.offsetHeight||38;
+
+  peekH=handleH+peekLabelH+tabsH+4;       // visible height when collapsed
+  expandedH=Math.round(vh*0.88);           // height when fully open
+  sheetEl.style.height=expandedH+'px';
+
+  // Position: collapsed by default = only peekH visible at bottom
+  snapTo(SNAPPED_PEEK?'peek':'expanded', false);
+}
+
 function snapTo(pos, animate=true){
-  const targetY = pos==='peek' ? sheetH - peekH : sheetH - expandedH;
+  if(!sheetEl)return;
+  const expandedTop=window.innerHeight-expandedH;  // top of sheet when open
+  const peekTop=window.innerHeight-peekH;           // top of sheet when collapsed
+
+  const targetY = pos==='peek' ? peekTop : expandedTop;
   currentY=targetY;
   SNAPPED_PEEK=(pos==='peek');
+
   if(animate){
     sheetEl.classList.add('snapping');
     setTimeout(()=>sheetEl.classList.remove('snapping'),350);
   }
-  sheetEl.style.transform=`translateY(${currentY}px)`;
+  // Use top instead of transform for fixed element — more reliable on mobile
+  sheetEl.style.top=currentY+'px';
+  sheetEl.style.transform='none';
   updateBlur(currentY);
+  // Let Leaflet know its container may have changed
+  setTimeout(()=>map&&map.invalidateSize({pan:false}),360);
 }
 
-function updateBlur(y){
-  // 0 = fully open (max blur), peekH from bottom = no blur
-  const maxBlur=8;
-  const maxDim=0.25;
-  const totalTravel=sheetH-peekH - (sheetH-expandedH);
-  const travel=Math.max(0, (sheetH-peekH) - y);
-  const ratio=Math.min(1, travel/Math.max(totalTravel,1));
-  const blur=ratio*maxBlur;
-  const dim=ratio*maxDim;
-  mapAreaEl.style.setProperty('--map-blur', blur+'px');
-  mapAreaEl.style.setProperty('--map-dim', dim);
+function updateBlur(topY){
+  const overlay=document.getElementById('map-blur-overlay');
+  if(!overlay)return;
+  const peekTop=window.innerHeight-peekH;
+  const expandedTop=window.innerHeight-expandedH;
+  const travel=peekTop-expandedTop;
+  const ratio=travel>0?Math.min(1,(peekTop-topY)/travel):0;
+  const blur=ratio*10;
+  const dim=ratio*0.2;
+  overlay.style.backdropFilter=`blur(${blur}px)`;
+  overlay.style.webkitBackdropFilter=`blur(${blur}px)`;
+  overlay.style.background=`rgba(0,0,0,${dim})`;
 }
 
 function onDragStart(e){
@@ -570,17 +584,20 @@ function onDragMove(e){
   if(e.cancelable)e.preventDefault();
   const y=e.touches?e.touches[0].clientY:e.clientY;
   const delta=y-dragStartY;
-  const minY=sheetH-expandedH;
-  const maxY=sheetH-peekH;
-  currentY=Math.min(maxY, Math.max(minY, dragStartTranslate+delta));
-  sheetEl.style.transform=`translateY(${currentY}px)`;
+  const expandedTop=window.innerHeight-expandedH;
+  const peekTop=window.innerHeight-peekH;
+  currentY=Math.min(peekTop,Math.max(expandedTop,dragStartTranslate+delta));
+  sheetEl.style.top=currentY+'px';
+  sheetEl.style.transform='none';
   updateBlur(currentY);
 }
 function onDragEnd(){
   if(!isDragging)return;
   isDragging=false;
-  const midY=(sheetH-peekH + sheetH-expandedH)/2;
-  snapTo(currentY > midY ? 'peek' : 'expanded');
+  const peekTop=window.innerHeight-peekH;
+  const expandedTop=window.innerHeight-expandedH;
+  const mid=(peekTop+expandedTop)/2;
+  snapTo(currentY>mid?'peek':'expanded');
 }
 
 // ── SHEET TABS ──
@@ -589,7 +606,6 @@ function switchSheetTab(name,el){
   document.querySelectorAll('.sheet-panel').forEach(p=>p.classList.remove('active'));
   el.classList.add('active');
   document.getElementById('sheet-panel-'+name).classList.add('active');
-  // auto expand when switching tab
   if(isMobile())snapTo('expanded');
 }
 
@@ -945,13 +961,16 @@ function haversine(a,b){const R=6371,dLat=(b.lat-a.lat)*Math.PI/180,dLng=(b.lng-
 function fmtDur(sec){if(!sec)return'';const h=Math.floor(sec/3600),m=Math.round((sec%3600)/60);return h?h+'h'+(m>0?(m<10?'0'+m:m)+'':''):(m||1)+'min';}
 function fmtTime(sec){const h=Math.floor(sec/3600),m=Math.round((sec%3600)/60);return h+'h'+(m<10?'0'+m:m);}
 
-window.addEventListener('resize',()=>{if(map)map.invalidateSize();});
+window.addEventListener('resize',()=>{if(map)map.invalidateSize({pan:false});});
 window.addEventListener('load',()=>{
   initMap();
   setTimeout(()=>{
     loadAllTrips();
-    if(isMobile())initSheet();
     renderRTForm(document.getElementById('rt-form-desktop'));
+    if(isMobile()){
+      sheetEl=document.getElementById('bottom-sheet');
+      initSheet();
+    }
   },300);
 });
 </script>
