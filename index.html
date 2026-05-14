@@ -275,6 +275,10 @@ textarea.rt-input{height:72px;padding:8px 9px;resize:vertical;line-height:1.5}
   .sheet-panel{display:none;flex:1;flex-direction:column;overflow:hidden;min-height:0}
   .sheet-panel.active{display:flex}
 
+  /* peek state — hide tabs and panels */
+  .bottom-sheet.is-peek .sheet-tabs{display:none}
+  .bottom-sheet.is-peek .sheet-panels{display:none}
+
   /* peek label */
   .sheet-peek-label{
     display:flex;align-items:center;justify-content:space-between;
@@ -466,13 +470,11 @@ const TRIPS_KEY='routetrip_all_v2';
 const isMobile=()=>window.innerWidth<=700;
 
 // ── SHEET DRAG STATE ──
-let sheetEl, mapAreaEl;
-let sheetH=0;          // total available height for sheet
-let peekH=0;           // height when peeking (collapsed)
-let expandedH=0;       // height when fully open
-let currentY=0;        // current translateY
+let sheetEl;
+let peekH=0, expandedH=0, currentY=0;
 let dragStartY=0, dragStartTranslate=0, isDragging=false;
-let SNAPPED_PEEK=true; // true=collapsed, false=expanded
+let lastVelocityY=0, lastTouchY=0, lastTouchTime=0;
+let SNAPPED_PEEK=true;
 
 // ── MAP INIT ──
 function initMap(){
@@ -524,40 +526,44 @@ function initSheet(){
 
 function computeHeights(){
   if(!sheetEl)return;
-  const vh=window.innerHeight;
-  const headerH=document.querySelector('.header').offsetHeight;
   const handleH=document.querySelector('.sheet-handle')?.offsetHeight||14;
   const peekLabelH=document.getElementById('sheet-peek-label')?.offsetHeight||40;
-  const tabsH=document.querySelector('.sheet-tabs')?.offsetHeight||38;
-
-  peekH=handleH+peekLabelH+tabsH+4;       // visible height when collapsed
-  expandedH=Math.round(vh*0.88);           // height when fully open
+  peekH=handleH+peekLabelH+16;
+  expandedH=Math.round(window.innerHeight*0.88);
   sheetEl.style.height=expandedH+'px';
-
-  // Position: collapsed by default = only peekH visible at bottom
-  snapTo(SNAPPED_PEEK?'peek':'expanded', false);
+  sheetEl.classList.add('is-peek');
+  snapTo(SNAPPED_PEEK?'peek':'expanded',false);
 }
 
 function snapTo(pos, animate=true){
   if(!sheetEl)return;
-  const expandedTop=window.innerHeight-expandedH;  // top of sheet when open
-  const peekTop=window.innerHeight-peekH;           // top of sheet when collapsed
-
+  const expandedTop=window.innerHeight-expandedH;
+  const peekTop=window.innerHeight-peekH;
   const targetY = pos==='peek' ? peekTop : expandedTop;
   currentY=targetY;
   SNAPPED_PEEK=(pos==='peek');
 
+  // toggle peek CSS class to show/hide tabs+panels
+  sheetEl.classList.toggle('is-peek', SNAPPED_PEEK);
   if(animate){
     sheetEl.classList.add('snapping');
     setTimeout(()=>sheetEl.classList.remove('snapping'),350);
   }
-  // Use top instead of transform for fixed element — more reliable on mobile
   sheetEl.style.top=currentY+'px';
   sheetEl.style.transform='none';
   updateBlur(currentY);
-  // Let Leaflet know its container may have changed
   setTimeout(()=>map&&map.invalidateSize({pan:false}),360);
 }
+
+// tap on peek label toggles open/close
+document.addEventListener('DOMContentLoaded',()=>{
+  const pl=document.getElementById('sheet-peek-label');
+  if(pl){
+    pl.addEventListener('click',()=>{
+      if(SNAPPED_PEEK) snapTo('expanded');
+    });
+  }
+});
 
 function updateBlur(topY){
   const overlay=document.getElementById('map-blur-overlay');
@@ -566,23 +572,30 @@ function updateBlur(topY){
   const expandedTop=window.innerHeight-expandedH;
   const travel=peekTop-expandedTop;
   const ratio=travel>0?Math.min(1,(peekTop-topY)/travel):0;
-  const blur=ratio*10;
-  const dim=ratio*0.2;
-  overlay.style.backdropFilter=`blur(${blur}px)`;
-  overlay.style.webkitBackdropFilter=`blur(${blur}px)`;
-  overlay.style.background=`rgba(0,0,0,${dim})`;
+  overlay.style.backdropFilter=`blur(${ratio*10}px)`;
+  overlay.style.webkitBackdropFilter=`blur(${ratio*10}px)`;
+  overlay.style.background=`rgba(0,0,0,${ratio*0.2})`;
 }
 
 function onDragStart(e){
   isDragging=true;
   dragStartY=e.touches?e.touches[0].clientY:e.clientY;
   dragStartTranslate=currentY;
+  lastVelocityY=0;
+  lastTouchTime=Date.now();
+  lastTouchY=dragStartY;
   sheetEl.classList.remove('snapping');
 }
 function onDragMove(e){
   if(!isDragging)return;
   if(e.cancelable)e.preventDefault();
   const y=e.touches?e.touches[0].clientY:e.clientY;
+  // track velocity
+  const now=Date.now();
+  const dt=now-lastTouchTime;
+  if(dt>0)lastVelocityY=(y-lastTouchY)/dt; // px/ms
+  lastTouchY=y;lastTouchTime=now;
+
   const delta=y-dragStartY;
   const expandedTop=window.innerHeight-expandedH;
   const peekTop=window.innerHeight-peekH;
@@ -594,10 +607,21 @@ function onDragMove(e){
 function onDragEnd(){
   if(!isDragging)return;
   isDragging=false;
-  const peekTop=window.innerHeight-peekH;
-  const expandedTop=window.innerHeight-expandedH;
-  const mid=(peekTop+expandedTop)/2;
-  snapTo(currentY>mid?'peek':'expanded');
+  // velocity threshold: >0.3 px/ms = fast swipe
+  const VELOCITY_THRESHOLD=0.3;
+  if(lastVelocityY < -VELOCITY_THRESHOLD){
+    // fast swipe UP → open
+    snapTo('expanded');
+  } else if(lastVelocityY > VELOCITY_THRESHOLD){
+    // fast swipe DOWN → close
+    snapTo('peek');
+  } else {
+    // slow drag → snap to nearest
+    const peekTop=window.innerHeight-peekH;
+    const expandedTop=window.innerHeight-expandedH;
+    const mid=(peekTop+expandedTop)/2;
+    snapTo(currentY>mid?'peek':'expanded');
+  }
 }
 
 // ── SHEET TABS ──
@@ -784,8 +808,8 @@ function renderRTForm(container){
   if(!container)return;
   const trip=getCurrentTrip();const m=trip?.meta||{};
   container.innerHTML=`
-    <div class="rt-group"><label class="rt-label">Nom du road trip</label><input class="rt-input" type="text" id="rt-name" placeholder="Ex : Tour de Bretagne 2025" value="${m.name||''}" oninput="saveMeta()"/></div>
-    <div class="rt-group"><label class="rt-label">Dates</label><div class="rt-dates"><div><label class="rt-label" style="margin-bottom:2px">Départ</label><input class="rt-input" type="date" id="rt-start" value="${m.start||''}" oninput="onDateChange()"/></div><div><label class="rt-label" style="margin-bottom:2px">Retour</label><input class="rt-input" type="date" id="rt-end" value="${m.end||''}" oninput="onDateChange()"/></div></div></div>
+    <div class="rt-group"><label class="rt-label">Nom du road trip</label><input class="rt-input" type="text" id="rt-name" placeholder="Ex : Tour de Bretagne 2025" value="${(m.name||'').replace(/"/g,'&quot;')}" oninput="saveMeta()"/></div>
+    <div class="rt-group"><label class="rt-label">Dates</label><div class="rt-dates"><div><label class="rt-label" style="margin-bottom:2px">Départ</label><input class="rt-input" type="date" id="rt-start" value="${m.start||''}" onchange="onDateChange()"/></div><div><label class="rt-label" style="margin-bottom:2px">Retour</label><input class="rt-input" type="date" id="rt-end" value="${m.end||''}" onchange="onDateChange()"/></div></div></div>
     <div class="rt-computed" id="rt-days-block" style="display:none"><div class="rt-computed-label">Durée du voyage</div><div class="rt-computed-val" id="rt-days-val">—</div><div class="rt-computed-sub" id="rt-days-sub"></div></div>
     <div class="rt-divider"></div>
     <div class="rt-group"><label class="rt-label">Nombre de voyageurs</label><input class="rt-input" type="number" id="rt-travelers" value="${m.travelers||'1'}" min="1" max="20" oninput="saveMeta()"/></div>
@@ -793,33 +817,68 @@ function renderRTForm(container){
     <div class="rt-group"><label class="rt-label">Notes</label><textarea class="rt-input" id="rt-notes" placeholder="Hébergements, activités…" oninput="saveMeta()">${m.notes||''}</textarea></div>
     <div class="rt-divider"></div>
     <div class="rt-group"><label class="rt-label">Checklist</label><div class="checklist-add"><input class="checklist-input" id="cl-input" type="text" placeholder="Ajouter un élément…" onkeydown="if(event.key==='Enter')addCheckItem()"/><button class="checklist-add-btn" onclick="addCheckItem()"><i class="ti ti-plus"></i></button></div><ul class="checklist" id="cl-list"></ul></div>`;
-  renderChecklist();onDateChange();
+  renderChecklist();
+  // trigger date display without saving (avoids overwriting with empty)
+  const s=m.start,e=m.end;
+  if(s&&e&&e>=s){
+    const days=Math.round((new Date(e)-new Date(s))/(864e5))+1;
+    const block=container.querySelector('#rt-days-block');
+    const dv=container.querySelector('#rt-days-val');
+    const ds=container.querySelector('#rt-days-sub');
+    if(block)block.style.display='block';
+    if(dv)dv.textContent=days+' jour'+(days>1?'s':'');
+    if(ds)ds.textContent=totalKm?`Soit ~${Math.round(totalKm/days)} km/jour`:'';
+  }
 }
 
 // ── ROADTRIP META ──
+// Helper: read a field value — tries both desktop and mobile instances
+function getField(id){
+  const els=document.querySelectorAll('#'+id);
+  for(const el of els){if(el.value!==undefined&&el.value!=='')return el.value;}
+  return '';
+}
+// Helper: set a field value on all instances
+function setField(id,v){
+  document.querySelectorAll('#'+id).forEach(el=>{if(v!==undefined)el.value=v||'';});
+}
+
 function onDateChange(){
-  const s=document.getElementById('rt-start')?.value,e=document.getElementById('rt-end')?.value;
-  const block=document.getElementById('rt-days-block');
-  if(s&&e&&e>=s){
-    const days=Math.round((new Date(e)-new Date(s))/(864e5))+1;
-    const dv=document.getElementById('rt-days-val'),ds=document.getElementById('rt-days-sub');
-    if(dv)dv.textContent=days+' jour'+(days>1?'s':'');
-    if(ds)ds.textContent=totalKm?`Soit ~${Math.round(totalKm/days)} km/jour`:'';
-    if(block)block.style.display='block';
-  }else{if(block)block.style.display='none';}
+  const s=getField('rt-start'),e=getField('rt-end');
+  document.querySelectorAll('#rt-days-block').forEach(block=>{
+    if(s&&e&&e>=s){
+      const days=Math.round((new Date(e)-new Date(s))/(864e5))+1;
+      const dv=block.querySelector('#rt-days-val'),ds=block.querySelector('#rt-days-sub');
+      if(dv)dv.textContent=days+' jour'+(days>1?'s':'');
+      if(ds)ds.textContent=totalKm?`Soit ~${Math.round(totalKm/days)} km/jour`:'';
+      block.style.display='block';
+    }else{block.style.display='none';}
+  });
   updateSummary();saveMeta();
 }
+
 function saveMeta(){
   const trip=getCurrentTrip();if(!trip)return;
-  trip.meta=getCurrentMeta();trip.name=trip.meta.name||trip.name;
+  trip.meta=getCurrentMeta();
+  if(trip.meta.name)trip.name=trip.meta.name;
   saveAllTrips();renderTripsList();updatePeekLabel();
 }
+
 function getTripDays(){
-  const s=document.getElementById('rt-start')?.value,e=document.getElementById('rt-end')?.value;
+  const s=getField('rt-start'),e=getField('rt-end');
   if(s&&e&&e>=s)return Math.round((new Date(e)-new Date(s))/(864e5))+1;return null;
 }
+
 function getCurrentMeta(){
-  return{name:document.getElementById('rt-name')?.value||'',start:document.getElementById('rt-start')?.value||'',end:document.getElementById('rt-end')?.value||'',travelers:document.getElementById('rt-travelers')?.value||'1',budget:document.getElementById('rt-budget')?.value||'',notes:document.getElementById('rt-notes')?.value||'',checklist:JSON.parse(JSON.stringify(checkItems))};
+  return{
+    name:getField('rt-name'),
+    start:getField('rt-start'),
+    end:getField('rt-end'),
+    travelers:getField('rt-travelers')||'1',
+    budget:getField('rt-budget'),
+    notes:getField('rt-notes'),
+    checklist:JSON.parse(JSON.stringify(checkItems))
+  };
 }
 
 // ── SUMMARY ──
